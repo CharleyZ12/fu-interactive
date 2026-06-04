@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>织纹生字｜福字交互</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #F26B3A;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      display: block;
+      width: auto !important;
+      height: min(100vh, calc(100vw * 2832 / 1280)) !important;
+      max-width: 100vw;
+      max-height: 100vh;
+      image-rendering: auto;
+    }
+  </style>
+</head>
+<body>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.4/p5.min.js"></script>
+  <script>
+// =====================================================
+// 点阵“福”字 + 动态变形网格 网页版
+// 鼠标控制上下左右拉伸 / 收缩
+// 画面比例：1280 : 2832
+// 按 G 开关网格
+// =====================================================
+
+const pattern = [
+  "########..########",
+  "########..########",
+  "..................",
+  "..................",
+  "########..########",
+  "########..########",
+  "..................",
+  "..................",
+
+  "##.##.##..########",
+  "##.##.##..########",
+  "##.##.##..##....##",
+  "##.##.##..##....##",
+  "##.##.##..##....##",
+  "##.##.##..########",
+  "##.##.##..########",
+
+  "##.##.##..........",
+  "##.##.##..........",
+
+  "##.##.##..########",
+  "##.##.##..########",
+  "##.##.##..##.##.##",
+  "##.##.##..##.##.##",
+  "##.##.##..##.##.##",
+  "##.##.##..########",
+  "##.##.##..##.##.##",
+  "##.##.##..##.##.##",
+  "##.##.##..##.##.##",
+  "##.##.##..########",
+  "##.##.##..########"
+];
+
+let rows, cols;
+let marginX = 0;
+let marginY = 0;
+
+let baseColW;
+let baseRowH;
+
+let colScale, rowScale;
+let targetColScale, targetRowScale;
+let colCenter, rowCenter;
+let baseColCenter, baseRowCenter;
+let colEdge, rowEdge;
+let colW, rowH;
+let colStretchBias, colCompressBias;
+let rowStretchBias, rowCompressBias;
+
+let ease = 0.22;
+let velX = 0;
+let velY = 0;
+let velEase = 0.22;
+
+let nearX = 78;
+let midX  = 205;
+let farX  = 500;
+
+let baseMaxStretchX = 4.8;
+let baseMinCompressX = 0.16;
+
+let nearY = 78;
+let midY  = 205;
+let farY  = 610;
+
+let baseMaxStretchY = 4.4;
+let baseMinCompressY = 0.18;
+
+let showGrid = true;
+
+function setup() {
+  // 原 Processing 尺寸：size(1280/3, 2832/3)
+  createCanvas(1280 / 3, 2832 / 3);
+  smooth();
+  rectMode(CORNER);
+  ellipseMode(CENTER);
+  noStroke();
+
+  rows = pattern.length;
+  cols = pattern[0].length;
+
+  baseColW = (width - marginX * 2.0) / cols;
+  baseRowH = (height - marginY * 2.0) / rows;
+
+  colScale = new Array(cols).fill(1.0);
+  rowScale = new Array(rows).fill(1.0);
+  targetColScale = new Array(cols).fill(1.0);
+  targetRowScale = new Array(rows).fill(1.0);
+
+  colCenter = new Array(cols).fill(0);
+  rowCenter = new Array(rows).fill(0);
+  baseColCenter = new Array(cols).fill(0);
+  baseRowCenter = new Array(rows).fill(0);
+
+  colEdge = new Array(cols + 1).fill(0);
+  rowEdge = new Array(rows + 1).fill(0);
+  colW = new Array(cols).fill(0);
+  rowH = new Array(rows).fill(0);
+
+  colStretchBias = new Array(cols).fill(0);
+  colCompressBias = new Array(cols).fill(0);
+  rowStretchBias = new Array(rows).fill(0);
+  rowCompressBias = new Array(rows).fill(0);
+
+  buildBiases();
+  updateBaseCenters();
+  updateMappedCenters();
+}
+
+function draw() {
+  updateMouseVelocity();
+
+  const active = mouseInsideGraphic();
+
+  updateTargets(active);
+  updateScales();
+  updateMappedCenters();
+
+  drawWarmGridBackground();
+
+  if (showGrid) {
+    drawDynamicGrid();
+  }
+
+  drawFu();
+}
+
+function drawWarmGridBackground() {
+  noStroke();
+
+  const cOrange = color('#F26B3A');
+  const cRed    = color('#F05A5A');
+  const cPink   = color('#F6A5C0');
+  const cRose   = color('#F28CB1');
+  const cYellow = color('#FFD45C');
+  const cCream  = color('#FFE9A8');
+
+  const palette = [cOrange, cRed, cPink, cRose, cYellow, cCream];
+
+  background(cOrange);
+
+  const tx = constrain(mouseX / width, 0, 1);
+  const ty = constrain(mouseY / height, 0, 1);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = colEdge[c];
+      const y = rowEdge[r];
+      const w = colEdge[c + 1] - colEdge[c];
+      const h = rowEdge[r + 1] - rowEdge[r];
+
+      const filled = pattern[r].charAt(c) === '#';
+
+      const idA = (r + c) % palette.length;
+      const idB = (r * 2 + c * 3 + 1) % palette.length;
+      const idC = (r * 5 + c + 2) % palette.length;
+
+      const ca = palette[idA];
+      const cb = palette[idB];
+      const cc = palette[idC];
+
+      const mixA = 0.10 + 0.80 * tx;
+      const mixB = 0.10 + 0.80 * ty;
+      const mixC = 0.5 + 0.5 * sin(frameCount * 0.012 + r * 0.45 + c * 0.38);
+
+      const mix1 = lerpColor(ca, cb, mixA);
+      const mix2 = lerpColor(mix1, cc, mixB * 0.45);
+
+      let finalC;
+      if (filled) {
+        finalC = lerpColor(mix2, ca, 0.28 + 0.16 * mixC);
+      } else {
+        finalC = lerpColor(mix2, cCream, 0.14 + 0.12 * mixC);
+      }
+
+      fill(finalC);
+      rect(x, y, w, h);
+
+      drawCellWeave(x, y, w, h, finalC, palette, filled, r, c, tx, ty);
+    }
+  }
+}
+
+function drawCellWeave(x, y, w, h, baseC, palette, filled, rr, cc, tx, ty) {
+  push();
+  noStroke();
+
+  const stripeCount = 3;
+  const alpha1 = filled ? 24 : 12;
+  const alpha2 = filled ? 20 : 10;
+
+  const lightC = palette[(rr + cc + 1) % palette.length];
+  const deepC  = palette[(rr * 2 + cc + 3) % palette.length];
+
+  const stripeLight = lerpColor(baseC, lightC, filled ? 0.16 : 0.10);
+  const stripeDark  = lerpColor(baseC, deepC,  filled ? 0.18 : 0.10);
+
+  for (let i = 0; i < stripeCount; i++) {
+    const yy = y + (i + 0.5) * h / stripeCount;
+    const hh = h * 0.10;
+    fill(red(stripeLight), green(stripeLight), blue(stripeLight), alpha1);
+    rect(x, yy - hh * 0.5, w, hh);
+  }
+
+  for (let i = 0; i < stripeCount; i++) {
+    const xx = x + (i + 0.5) * w / stripeCount;
+    const ww = w * 0.10;
+    fill(red(stripeDark), green(stripeDark), blue(stripeDark), alpha2);
+    rect(xx - ww * 0.5, y, ww, h);
+  }
+
+  if ((rr + cc) % 2 === 0) {
+    const centerBase = palette[(rr + cc + 4) % palette.length];
+    const centerC = lerpColor(baseC, centerBase, filled ? 0.14 : 0.08);
+    const a = filled ? 20 : 8;
+    fill(red(centerC), green(centerC), blue(centerC), a);
+    rect(x + w * 0.30, y + h * 0.30, w * 0.40, h * 0.40);
+  }
+
+  pop();
+}
+
+function updateMouseVelocity() {
+  const dx = mouseX - pmouseX;
+  const dy = mouseY - pmouseY;
+
+  velX = lerp(velX, dx, velEase);
+  velY = lerp(velY, dy, velEase);
+}
+
+function buildBiases() {
+  for (let c = 0; c < cols; c++) {
+    const n1 = noise(c * 0.23 + 10.0);
+    const n2 = noise(c * 0.31 + 80.0);
+
+    const sWave = 0.5 + 0.5 * sin(c * 0.95 + 0.6);
+    const cWave = 0.5 + 0.5 * cos(c * 0.57 + 1.3);
+
+    colStretchBias[c] = 0.55 + 0.75 * n1 + 0.45 * sWave;
+    colCompressBias[c] = 0.65 + 0.85 * n2 + 0.35 * cWave;
+
+    colStretchBias[c] = constrain(colStretchBias[c], 0.55, 1.75);
+    colCompressBias[c] = constrain(colCompressBias[c], 0.65, 1.95);
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const n1 = noise(r * 0.21 + 120.0);
+    const n2 = noise(r * 0.29 + 200.0);
+
+    const sWave = 0.5 + 0.5 * sin(r * 0.82 + 0.2);
+    const cWave = 0.5 + 0.5 * cos(r * 0.51 + 1.1);
+
+    rowStretchBias[r] = 0.58 + 0.72 * n1 + 0.42 * sWave;
+    rowCompressBias[r] = 0.68 + 0.82 * n2 + 0.32 * cWave;
+
+    rowStretchBias[r] = constrain(rowStretchBias[r], 0.55, 1.70);
+    rowCompressBias[r] = constrain(rowCompressBias[r], 0.65, 1.90);
+  }
+}
+
+function mouseInsideGraphic() {
+  const margin = 90;
+
+  const totalW = cols * baseColW;
+  const totalH = rows * baseRowH;
+
+  const x0 = width * 0.5 - totalW * 0.5;
+  const y0 = height * 0.5 - totalH * 0.5;
+
+  return mouseX >= x0 - margin &&
+         mouseX <= x0 + totalW + margin &&
+         mouseY >= y0 - margin &&
+         mouseY <= y0 + totalH + margin;
+}
+
+function updateBaseCenters() {
+  const totalW = cols * baseColW;
+  const totalH = rows * baseRowH;
+
+  const x0 = width * 0.5 - totalW * 0.5;
+  const y0 = height * 0.5 - totalH * 0.5;
+
+  for (let c = 0; c < cols; c++) {
+    baseColCenter[c] = x0 + baseColW * 0.5 + c * baseColW;
+  }
+
+  for (let r = 0; r < rows; r++) {
+    baseRowCenter[r] = y0 + baseRowH * 0.5 + r * baseRowH;
+  }
+}
+
+function updateTargets(active) {
+  if (!active) {
+    for (let c = 0; c < cols; c++) targetColScale[c] = 1.0;
+    for (let r = 0; r < rows; r++) targetRowScale[r] = 1.0;
+    return;
+  }
+
+  const ax = abs(velX);
+  const ay = abs(velY);
+  const sum = ax + ay + 0.0001;
+
+  let hDominance = ax / sum;
+  let vDominance = ay / sum;
+
+  const speed = sqrt(ax * ax + ay * ay);
+  const idleBlend = constrain(map(speed, 0, 4, 0, 1), 0, 1);
+
+  hDominance = lerp(0.5, hDominance, idleBlend);
+  vDominance = lerp(0.5, vDominance, idleBlend);
+
+  const maxStretchX = baseMaxStretchX * lerp(0.75, 1.45, hDominance);
+  const maxStretchY = baseMaxStretchY * lerp(0.75, 1.45, vDominance);
+
+  const minCompressX = lerp(0.30, baseMinCompressX, hDominance);
+  const minCompressY = lerp(0.30, baseMinCompressY, vDominance);
+
+  for (let c = 0; c < cols; c++) {
+    const distX = abs(baseColCenter[c] - mouseX);
+    let s = 1.0;
+
+    if (distX <= nearX) {
+      let t = 1.0 - distX / nearX;
+      t = smootherstep(t);
+      const baseS = lerp(1.0, maxStretchX, t);
+      s = 1.0 + (baseS - 1.0) * colStretchBias[c];
+    } else if (distX <= midX) {
+      let t = (distX - nearX) / (midX - nearX);
+      t = constrain(t, 0, 1);
+      t = smootherstep(t);
+      const baseS = lerp(maxStretchX, 1.0, t);
+      const amp = lerp(colStretchBias[c], 1.0, t);
+      s = 1.0 + (baseS - 1.0) * amp;
+    } else if (distX <= farX) {
+      let t = (distX - midX) / (farX - midX);
+      t = constrain(t, 0, 1);
+      t = smootherstep(t);
+      const baseS = lerp(1.0, minCompressX, t);
+      s = 1.0 - (1.0 - baseS) * colCompressBias[c];
+    } else {
+      s = 1.0 - (1.0 - minCompressX) * colCompressBias[c];
+    }
+
+    targetColScale[c] = constrain(s, 0.05, maxStretchX * 1.15);
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const distY = abs(baseRowCenter[r] - mouseY);
+    let s = 1.0;
+
+    if (distY <= nearY) {
+      let t = 1.0 - distY / nearY;
+      t = smootherstep(t);
+      const baseS = lerp(1.0, maxStretchY, t);
+      s = 1.0 + (baseS - 1.0) * rowStretchBias[r];
+    } else if (distY <= midY) {
+      let t = (distY - nearY) / (midY - nearY);
+      t = constrain(t, 0, 1);
+      t = smootherstep(t);
+      const baseS = lerp(maxStretchY, 1.0, t);
+      const amp = lerp(rowStretchBias[r], 1.0, t);
+      s = 1.0 + (baseS - 1.0) * amp;
+    } else if (distY <= farY) {
+      let t = (distY - midY) / (farY - midY);
+      t = constrain(t, 0, 1);
+      t = smootherstep(t);
+      const baseS = lerp(1.0, minCompressY, t);
+      s = 1.0 - (1.0 - baseS) * rowCompressBias[r];
+    } else {
+      s = 1.0 - (1.0 - minCompressY) * rowCompressBias[r];
+    }
+
+    targetRowScale[r] = constrain(s, 0.05, maxStretchY * 1.15);
+  }
+
+  normalizeArray(targetColScale);
+  normalizeArray(targetRowScale);
+}
+
+function updateScales() {
+  for (let c = 0; c < cols; c++) {
+    colScale[c] = lerp(colScale[c], targetColScale[c], ease);
+  }
+
+  for (let r = 0; r < rows; r++) {
+    rowScale[r] = lerp(rowScale[r], targetRowScale[r], ease);
+  }
+
+  normalizeArray(colScale);
+  normalizeArray(rowScale);
+}
+
+function updateMappedCenters() {
+  for (let c = 0; c < cols; c++) {
+    colW[c] = baseColW * colScale[c];
+  }
+
+  for (let r = 0; r < rows; r++) {
+    rowH[r] = baseRowH * rowScale[r];
+  }
+
+  let totalW = 0;
+  for (let c = 0; c < cols; c++) totalW += colW[c];
+
+  let totalH = 0;
+  for (let r = 0; r < rows; r++) totalH += rowH[r];
+
+  const x0 = width * 0.5 - totalW * 0.5;
+  const y0 = height * 0.5 - totalH * 0.5;
+
+  colEdge[0] = x0;
+  for (let c = 1; c <= cols; c++) {
+    colEdge[c] = colEdge[c - 1] + colW[c - 1];
+  }
+
+  rowEdge[0] = y0;
+  for (let r = 1; r <= rows; r++) {
+    rowEdge[r] = rowEdge[r - 1] + rowH[r - 1];
+  }
+
+  for (let c = 0; c < cols; c++) {
+    colCenter[c] = (colEdge[c] + colEdge[c + 1]) * 0.5;
+  }
+
+  for (let r = 0; r < rows; r++) {
+    rowCenter[r] = (rowEdge[r] + rowEdge[r + 1]) * 0.5;
+  }
+}
+
+function drawDynamicGrid() {
+  stroke(255, 70);
+  strokeWeight(0.7);
+
+  for (let c = 0; c <= cols; c++) {
+    line(colEdge[c], rowEdge[0], colEdge[c], rowEdge[rows]);
+  }
+
+  for (let r = 0; r <= rows; r++) {
+    line(colEdge[0], rowEdge[r], colEdge[cols], rowEdge[r]);
+  }
+
+  stroke(255, 130);
+  strokeWeight(1.2);
+
+  let nearestC = 0;
+  let bestX = 999999;
+  for (let c = 0; c <= cols; c++) {
+    const dd = abs(colEdge[c] - mouseX);
+    if (dd < bestX) {
+      bestX = dd;
+      nearestC = c;
+    }
+  }
+
+  let nearestR = 0;
+  let bestY = 999999;
+  for (let r = 0; r <= rows; r++) {
+    const dd = abs(rowEdge[r] - mouseY);
+    if (dd < bestY) {
+      bestY = dd;
+      nearestR = r;
+    }
+  }
+
+  line(colEdge[nearestC], rowEdge[0], colEdge[nearestC], rowEdge[rows]);
+  line(colEdge[0], rowEdge[nearestR], colEdge[cols], rowEdge[nearestR]);
+
+  noStroke();
+}
+
+function drawFu() {
+  fill(0);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (pattern[r].charAt(c) === '#') {
+        ellipse(colCenter[c], rowCenter[r], colW[c], rowH[r]);
+      }
+    }
+  }
+}
+
+function normalizeArray(arr) {
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i];
+  }
+
+  let avg = sum / arr.length;
+  if (abs(avg) < 0.00001) avg = 1.0;
+
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] /= avg;
+  }
+}
+
+function smootherstep(x) {
+  x = constrain(x, 0, 1);
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+function keyPressed() {
+  if (key === 'g' || key === 'G') {
+    showGrid = !showGrid;
+  }
+}
+  </script>
+</body>
+</html>
